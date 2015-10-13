@@ -22,6 +22,10 @@ module Dynamoid
       @tables_.value
     end
 
+    def reset_cache_tables
+      @tables_ = Concurrent::Atom.new(nil)
+    end
+
     # The actual adapter currently in use.
     #
     # @since 0.2.0
