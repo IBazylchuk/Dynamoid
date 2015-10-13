@@ -99,6 +99,10 @@ module Dynamoid #:nodoc:
         { :consistent_read => consistent_read }
       end
 
+      def table_exists?
+        Dynamoid.adapter.tables.include?(source.table_name)
+      end
+
       private
 
       # The actual records referenced by the association.
@@ -107,6 +111,7 @@ module Dynamoid #:nodoc:
       #
       # @since 0.2.0
       def records
+        source.create_table unless table_exists?
         results = if key_present?
           records_via_query
         else
