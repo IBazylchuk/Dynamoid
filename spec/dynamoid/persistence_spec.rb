@@ -29,7 +29,7 @@ describe Dynamoid::Persistence do
 
     expect(Dynamoid.adapter.read("dynamoid_tests_addresses", address.id)[:id]).to eq address.id
   end
-  
+
   it 'prevents concurrent writes to tables with a lock_version' do
     address.save!
     a1 = address
@@ -37,11 +37,11 @@ describe Dynamoid::Persistence do
 
     a1.city = 'Seattle'
     a2.city = 'San Francisco'
-    
+
     a1.save!
     expect { a2.save! }.to raise_exception(Dynamoid::Errors::StaleObjectError)
   end
-  
+
   it 'assigns itself an id on save only if it does not have one' do
     address.id = 'test123'
     address.save
@@ -271,18 +271,54 @@ describe Dynamoid::Persistence do
         end
       end.to raise_error(Dynamoid::Errors::StaleObjectError)
     end
-    
+
     it 'prevents concurrent saves to tables with a lock_version' do
       address.save!
       a2 = Address.find(address.id)
       a2.update! { |a| a.set(:city => "Chicago") }
-      
+
       expect do
         address.city = "Seattle"
         address.save!
       end.to raise_error(Dynamoid::Errors::StaleObjectError)
     end
 
+  end
+
+  context 'increment' do
+    before :each do
+      @tweet = Tweet.create(:tweet_id => 1, :group => 'abc', :count => nil, :tags => Set.new(['db', 'sql']), :user_name => 'john')
+    end
+
+    it 'support increment operation on a field' do
+      @tweet.increment!(:count, 3)
+
+      expect(@tweet.count).to eq(3)
+    end
+
+    it 'checks some times increment' do
+      100.times { @tweet.increment!(:count) }
+
+      expect(@tweet.count).to eq(100)
+    end
+  end
+
+  context 'decrement' do
+    before :each do
+      @tweet = Tweet.create(:tweet_id => 1, :group => 'abc', :count => 100, :tags => Set.new(['db', 'sql']), :user_name => 'john')
+    end
+
+    it 'support decrement operation on a field' do
+      @tweet.decrement!(:count, 3)
+
+      expect(@tweet.count).to eq(97)
+    end
+
+    it 'checks some times decrement' do
+      100.times { @tweet.decrement!(:count) }
+
+      expect(@tweet.count).to eq(0)
+    end
   end
 
   context 'delete' do

@@ -171,8 +171,8 @@ module Dynamoid
     end
 
     #
-    # update!() will increment the lock_version if the table has the column, but will not check it. Thus, a concurrent save will 
-    # never cause an update! to fail, but an update! may cause a concurrent save to fail. 
+    # update!() will increment the lock_version if the table has the column, but will not check it. Thus, a concurrent save will
+    # never cause an update! to fail, but an update! may cause a concurrent save to fail.
     #
     #
     def update!(conditions = {}, &block)
@@ -199,6 +199,18 @@ module Dynamoid
       true
     rescue Dynamoid::Errors::StaleObjectError
       false
+    end
+
+    def increment!(field, increment_size = 1, conditions = {})
+      update!(conditions) do |t|
+        t.add(field => increment_size)
+      end
+    end
+
+    def decrement!(field, decrement_size = 1, conditions = {})
+      update!(conditions) do |t|
+        t.add(field => -decrement_size)
+      end
     end
 
     # Delete this object, but only after running callbacks for it.
@@ -268,14 +280,14 @@ module Dynamoid
         end
       end
     end
-    
+
     # Persist the object into the datastore. Assign it an id first if it doesn't have one.
     #
     # @since 0.2.0
     def persist(conditions = nil)
       run_callbacks(:save) do
         self.hash_key = SecureRandom.uuid if self.hash_key.nil? || self.hash_key.blank?
-        
+
         # Add an exists check to prevent overwriting existing records with new ones
         if(new_record?)
           conditions ||= {}
