@@ -16,6 +16,7 @@ module Dynamoid
       #
       # @since 0.2.0
       def find(*ids)
+        self.create_table unless Dynamoid.adapter.tables.include?(self.table_name)
         options = if ids.last.is_a? Hash
                     ids.slice!(-1)
                   else
@@ -45,6 +46,7 @@ module Dynamoid
       #   find all the tweets using hash key and range key with consistent read
       #   Tweet.find_all([['1', 'red'], ['1', 'green']], :consistent_read => true)
       def find_all(ids, options = {})
+        self.create_table unless Dynamoid.adapter.tables.include?(self.table_name)
         items = Dynamoid.adapter.read(self.table_name, ids, options)
         items ? items[self.table_name].map{|i| from_database(i)} : []
       end

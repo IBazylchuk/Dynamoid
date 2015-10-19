@@ -106,6 +106,7 @@ module Dynamoid
         Dynamoid.logger.info "Creating #{table_name} table. This could take a while."
         read_capacity = options[:read_capacity] || Dynamoid::Config.read_capacity
         write_capacity = options[:write_capacity] || Dynamoid::Config.write_capacity
+        hash_key_type = options[:hash_key_type] || :string
         range_key = options[:range_key]
 
         key_schema = [
@@ -115,9 +116,8 @@ module Dynamoid
           attribute_name: range_key.keys.first.to_s, key_type: RANGE_KEY
         } if(range_key)
 
-        #TODO: Provide support for number and binary hash key
         attribute_definitions = [
-          { attribute_name: key.to_s, attribute_type: 'S' }
+          { attribute_name: key.to_s, attribute_type: api_type(hash_key_type) }
         ]
         attribute_definitions << {
           attribute_name: range_key.keys.first.to_s, attribute_type: api_type(range_key.values.first)
@@ -405,6 +405,7 @@ module Dynamoid
         case(type)
         when :string  then STRING_TYPE
         when :number  then NUM_TYPE
+        when :integer  then NUM_TYPE
         when :datetime then NUM_TYPE
         when :boolean then BOOLEAN_TYPE
         else raise "Unknown type: #{type}"

@@ -57,6 +57,10 @@ module Dynamoid #:nodoc:
         options[:key] || :id
       end
 
+      def hash_key_type
+        options[:hash_key_type] || :string
+      end
+
       # Returns the number of items for this class.
       #
       # @since 0.6.1

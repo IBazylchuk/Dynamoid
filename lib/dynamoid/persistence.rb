@@ -35,11 +35,13 @@ module Dynamoid
         else
           range_key_hash = nil
         end
+
         options = {
           :id => self.hash_key,
           :table_name => self.table_name,
           :write_capacity => self.write_capacity,
           :read_capacity => self.read_capacity,
+          :hash_key_type => self.hash_key_type,
           :range_key => range_key_hash
         }.merge(options)
 
