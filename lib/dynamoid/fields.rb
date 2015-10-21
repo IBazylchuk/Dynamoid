@@ -58,7 +58,7 @@ module Dynamoid #:nodoc:
         #a default 'id' column is created when Dynamoid::Document is included
         unless(attributes.has_key? hash_key)
           remove_field :id
-          field(hash_key, options[:hash_key_type])
+          field(hash_key, options[:hash_key_type] || :string)
         end
       end
 
