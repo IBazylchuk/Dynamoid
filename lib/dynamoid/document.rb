@@ -116,11 +116,15 @@ module Dynamoid #:nodoc:
       end
 
       def batch_write(objects)
-        Dynamoid.adapter.write(table_name, objects)
+        objects.each_slice(25) do |o|
+          Dynamoid.adapter.write(table_name, o)
+        end
       end
 
       def batch_delete(objects)
-        Dynamoid.adapter.delete(table_name, objects)
+        objects.each_slice(25) do |o|
+          Dynamoid.adapter.delete(table_name, o)
+        end
       end
     end
 
