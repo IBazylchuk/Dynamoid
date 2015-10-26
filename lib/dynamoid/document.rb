@@ -13,7 +13,7 @@ module Dynamoid #:nodoc:
       self.read_only_attributes = []
       self.base_class = self
 
-      Dynamoid.included_models << self
+      Dynamoid.included_models << self unless Dynamoid.included_models.include? self
     end
 
     module ClassMethods
@@ -113,6 +113,14 @@ module Dynamoid #:nodoc:
           when Hash then ! where(id_or_conditions).all.empty?
           else !! find(id_or_conditions)
         end
+      end
+
+      def batch_write(objects)
+        Dynamoid.adapter.write(table_name, objects)
+      end
+
+      def batch_delete(objects)
+        Dynamoid.adapter.delete(table_name, objects)
       end
     end
 

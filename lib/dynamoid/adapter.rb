@@ -68,8 +68,27 @@ module Dynamoid
     # @return [Object] the persisted object
     #
     # @since 0.2.0
-    def write(table, object, options = nil)
-      put_item(table, object, options)
+    def write(table, objects, options = nil)
+      if objects.is_a?(Array)
+        if objects.count > 100
+          raise Dynamoid::Errors::BatchLimitExceeded
+        else
+          tables = {}
+          if objects[0].is_a?(Dynamoid::Document)
+            objects.each do |object|
+              object.created_at = DateTime.now.to_f
+              object.updated_at = DateTime.now.to_f
+              tables[object.class.table_name] ||= []
+              tables[object.class.table_name] << object.attributes
+            end
+          else
+            tables[table] = objects
+          end
+          batch_write_item(tables, options)
+        end
+      else
+        put_item(table, objects, options)
+      end
     end
 
     # Read one or many keys from the selected table.
@@ -89,6 +108,7 @@ module Dynamoid
 
       if ids.respond_to?(:each)
         ids = ids.collect{|id| range_key ? [id, range_key] : id}
+        raise Dynamoid::Errors::BatchLimitExceeded if ids.count > 100
         batch_get_item({table => ids}, options)
       else
         options[:range_key] = range_key if range_key
@@ -135,7 +155,7 @@ module Dynamoid
       end
     end
 
-    [:batch_get_item, :delete_item, :delete_table, :get_item, :list_tables, :put_item].each do |m|
+    [:batch_get_item, :batch_write_item, :delete_item, :delete_table, :get_item, :list_tables, :put_item].each do |m|
       # Method delegation with benchmark to the underlying adapter. Faster than relying on method_missing.
       #
       # @since 0.2.0

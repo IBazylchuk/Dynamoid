@@ -6,6 +6,7 @@ describe Dynamoid::Adapter do
   def test_table; 'dynamoid_tests_TestTable'; end
   let(:single_id){'123'}
   let(:many_ids){%w(1 2)}
+  let(:alot_ids){ (1..101).to_a }
 
   describe 'connection management' do
     it 'does not auto-establish a connection' do
@@ -53,7 +54,7 @@ describe Dynamoid::Adapter do
   it 'raises NoMethodError if we try a method that is not on the child' do
     expect {subject.foobar}.to raise_error(NoMethodError)
   end
-  
+
   it 'writes through the adapter' do
     expect(subject).to receive(:put_item).with(test_table, {:id => single_id}, nil).and_return(true)
     subject.write(test_table, {:id => single_id})
@@ -67,6 +68,19 @@ describe Dynamoid::Adapter do
   it 'reads through the adapter for many IDs' do
     expect(subject).to receive(:batch_get_item).with({test_table => many_ids}, {}).and_return(true)
     subject.read(test_table, many_ids)
+  end
+
+  it 'raise Dynamoid::Errors::BatchLimitExceeded if more then 100 ids' do
+    expect { subject.read(test_table, alot_ids) }.to raise_error(Dynamoid::Errors::BatchLimitExceeded)
+  end
+
+  it 'raise Dynamoid::Errors::BatchLimitExceeded if more then 100 ids' do
+    expect { subject.write(test_table, alot_ids) }.to raise_error(Dynamoid::Errors::BatchLimitExceeded)
+  end
+
+  it 'writes through the adapter for many IDs' do
+    expect(subject).to receive(:batch_write_item).with({test_table => many_ids.map { |id| { id: id } } }, nil).and_return(true)
+    subject.write(test_table, many_ids.map { |id| { id: id } })
   end
 
   it 'delete through the adapter for one ID' do

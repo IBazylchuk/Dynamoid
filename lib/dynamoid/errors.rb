@@ -1,12 +1,12 @@
 # encoding: utf-8
 module Dynamoid
-  
+
   # All the errors specific to Dynamoid.  The goal is to mimic ActiveRecord.
   module Errors
-    
+
     # Generic Dynamoid error
     class Error < StandardError; end
-    
+
     class MissingRangeKey < Error; end
 
     # This class is intended to be private to Dynamoid.
@@ -45,5 +45,11 @@ module Dynamoid
     end
 
     class InvalidQuery < Error; end
+
+    class BatchLimitExceeded < Error
+      def initialize
+        super("Batch limit is 100")
+      end
+    end
   end
 end

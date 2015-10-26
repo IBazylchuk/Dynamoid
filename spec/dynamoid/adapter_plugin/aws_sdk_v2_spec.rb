@@ -53,7 +53,7 @@ describe Dynamoid::AdapterPlugin::AwsSdkV2 do
       expect(Dynamoid.adapter.query(test_table3, :hash_value => '1', :range_lte => 3.0).to_a).to eq [{:id => '1', :range => BigDecimal.new(1)}, {:id => '1', :range => BigDecimal.new(3)}]
     end
   end
-  
+
   #
   # Tests scan_index_forwards flag behavior on range queries
   #
@@ -76,7 +76,7 @@ describe Dynamoid::AdapterPlugin::AwsSdkV2 do
       expect(query[4]).to eq({:id => '1', :order => 5, :range => BigDecimal.new(5)})
       expect(query[5]).to eq({:id => '1', :order => 6, :range => BigDecimal.new(6)})
     end
-    
+
     it 'performs query on a table with a range and selects items less than that is in the correct order, scan_index_forward false' do
       query = Dynamoid.adapter.query(test_table4, :hash_value => '1', :range_greater_than => 0, :scan_index_forward => false).to_a
       expect(query[5]).to eq({:id => '1', :order => 1, :range => BigDecimal.new(1)})
@@ -87,8 +87,8 @@ describe Dynamoid::AdapterPlugin::AwsSdkV2 do
       expect(query[0]).to eq({:id => '1', :order => 6, :range => BigDecimal.new(6)})
     end
   end
-  
-  
+
+
   context 'without a preexisting table' do
     # CreateTable and DeleteTable
     it 'performs CreateTable and DeleteTable' do
@@ -141,9 +141,8 @@ describe Dynamoid::AdapterPlugin::AwsSdkV2 do
 
     # BatchGetItem
     it 'passes options to underlying BatchGet call' do
-      pending "at the moment passing the options to underlying batch get is not supported"
       expect_any_instance_of(Aws::DynamoDB::Client).to receive(:batch_get_item).with(:request_items => {test_table1 => {:keys => [{'id' => '1'}, {'id' => '2'}], :consistent_read => true}}).and_call_original
-      described_class.batch_get_item({test_table1 => ['1', '2']}, :consistent_read => true)
+      Dynamoid.adapter.batch_get_item({test_table1 => ['1', '2']}, :consistent_read => true)
     end
 
     it "performs BatchGetItem with singular keys" do
@@ -185,14 +184,33 @@ describe Dynamoid::AdapterPlugin::AwsSdkV2 do
       expect(results[test_table3]).to include({:name => 'Josh', :id => '1', :range => 1.0})
       expect(results[test_table3]).to include({:name => 'Justin', :id => '2', :range => 2.0})
     end
-    
+
+    # BatchWriteItem
+    it "performs BatchWriteItem with singular table" do
+      Dynamoid.adapter.batch_write_item(test_table1 => [{:id => '1', :name => 'Josh'}, {:id => '2', :name => 'Justin'}])
+
+      results = Dynamoid.adapter.batch_get_item(test_table1 => ['1', '2'])
+      expect(results.size).to eq 1
+      expect(results[test_table1]).to include({:name => 'Josh', :id => '1'})
+      expect(results[test_table1]).to include({:name => 'Justin', :id => '2'})
+    end
+
+    it "performs BatchWriteItem with multiple tables" do
+      Dynamoid.adapter.batch_write_item(test_table1 => [{:id => '1', :name => 'Josh'}], test_table2 => [{:id => '1', :name => 'Justin'}])
+
+      results = Dynamoid.adapter.batch_get_item(test_table1 => '1', test_table2 => '1')
+      expect(results.size).to eq 2
+      expect(results[test_table1]).to include({:name => 'Josh', :id => '1'})
+      expect(results[test_table2]).to include({:name => 'Justin', :id => '1'})
+    end
+
     # BatchDeleteItem
     it "performs BatchDeleteItem with singular keys" do
       Dynamoid.adapter.put_item(test_table1, {:id => '1', :name => 'Josh'})
       Dynamoid.adapter.put_item(test_table2, {:id => '1', :name => 'Justin'})
 
       Dynamoid.adapter.batch_delete_item(test_table1 => ['1'], test_table2 => ['1'])
-      
+
       results = Dynamoid.adapter.batch_get_item(test_table1 => '1', test_table2 => '1')
       expect(results.size).to eq 2
 
@@ -205,7 +223,7 @@ describe Dynamoid::AdapterPlugin::AwsSdkV2 do
       Dynamoid.adapter.put_item(test_table1, {:id => '2', :name => 'Justin'})
 
       Dynamoid.adapter.batch_delete_item(test_table1 => ['1', '2'])
-      
+
       results = Dynamoid.adapter.batch_get_item(test_table1 => ['1', '2'])
 
       expect(results.size).to eq 1
@@ -256,7 +274,7 @@ describe Dynamoid::AdapterPlugin::AwsSdkV2 do
 
       expect(Dynamoid.adapter.query(test_table1, :hash_value => '1').first).to eq({ :id=> '1', :name=>"Josh" })
     end
-    
+
     it_behaves_like 'range queries'
 
     # Scan
@@ -286,10 +304,10 @@ describe Dynamoid::AdapterPlugin::AwsSdkV2 do
 
       expect(Dynamoid.adapter.scan(test_table1, {})).to include({:name=>"Josh", :id=>"2"}, {:name=>"Josh", :id=>"1"})
     end
-    
+
     it_behaves_like 'correct ordering'
   end
-  
+
   # DescribeTable
 
   # UpdateItem

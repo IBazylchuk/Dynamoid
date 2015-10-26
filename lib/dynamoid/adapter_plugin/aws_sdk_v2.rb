@@ -27,7 +27,7 @@ module Dynamoid
       # Get many items at once from DynamoDB. More efficient than getting each item individually.
       #
       # @example Retrieve IDs 1 and 2 from the table testtable
-      #   Dynamoid::Adapter::AwsSdkV2.batch_get_item({'table1' => ['1', '2']})
+      #   Dynamoid::AdapterPlugin::AwsSdkV2.batch_get_item({'table1' => ['1', '2']})
       #
       # @param [Hash] table_ids the hash of tables and IDs to retrieve
       # @param [Hash] options to be passed to underlying BatchGet call
@@ -58,9 +58,11 @@ module Dynamoid
           end
 
           request_items[t] = {
-            keys: keys
+            keys: keys,
+            consistent_read: options[:consistent_read]
           }
         end
+
 
         results = client.batch_get_item(
           request_items: request_items
@@ -73,12 +75,57 @@ module Dynamoid
         ret
       end
 
+      # Put many items at once from DynamoDB. More efficient than getting each item individually.
+      #
+      # @example Retrieve IDs 1 and 2 from the table testtable
+      #   Dynamoid::AdapterPlugin::AwsSdkV2.batch_write_item({'table1' => {key1: '1', key2: '2'}})
+      #
+      # @param [Hash] table_ids the hash of tables and IDs to retrieve
+      # @param [Hash] options to be passed to underlying BatchGet call
+      #
+      # @return [Hash] a hash where keys are the table names and the values are the retrieved items
+      #
+      # @since 1.0.0
+      #
+      # @todo: Provide support for passing options to underlying batch_write_item http://docs.aws.amazon.com/sdkforruby/api/Aws/DynamoDB/Client.html#batch_write_item-instance_method
+      def batch_write_item(table_objects, options = {})
+        request_items = Hash.new{|h, k| h[k] = []}
+        return request_items if table_objects.all?{|k, v| v.empty?}
+
+        table_objects.each do |t, objects|
+          next if objects.empty?
+
+          objects.each do |items|
+            next if items.empty?
+
+            request_items[t] << {
+              put_request: {
+                item: items
+              }
+            }
+          end
+        end
+
+        results = client.batch_write_item(
+          request_items: request_items,
+          return_consumed_capacity: "INDEXES", # accepts INDEXES, TOTAL, NONE
+          return_item_collection_metrics: "SIZE"
+        )
+
+        # ret = Hash.new([].freeze) # Default for tables where no rows are returned
+        # results.data[:unprocessed_items].each do |table, rows|
+        #   ret[table] = rows.collect { |r| result_item_to_hash(r) }
+        # end
+        # ret
+        true
+      end
+
       # Delete many items at once from DynamoDB. More efficient than delete each item individually.
       #
       # @example Delete IDs 1 and 2 from the table testtable
-      #   Dynamoid::Adapter::AwsSdk.batch_delete_item('table1' => ['1', '2'])
+      #   Dynamoid::AdapterPlugin::AwsSdk.batch_delete_item('table1' => ['1', '2'])
       #or
-      #   Dynamoid::Adapter::AwsSdkV2.batch_delete_item('table1' => [['hk1', 'rk2'], ['hk1', 'rk2']]]))
+      #   Dynamoid::AdapterPlugin::AwsSdkV2.batch_delete_item('table1' => [['hk1', 'rk2'], ['hk1', 'rk2']]]))
       #
       # @param [Hash] options the hash of tables and IDs to delete
       #
@@ -86,6 +133,29 @@ module Dynamoid
       #
       # @todo: Provide support for passing options to underlying delete_item http://docs.aws.amazon.com/sdkforruby/api/Aws/DynamoDB/Client.html#delete_item-instance_method
       def batch_delete_item(options)
+        # request_items = Hash.new{|h, k| h[k] = []}
+        # return request_items if table_objects.all?{|k, v| v.empty?}
+
+        # table_objects.each do |t, objects|
+        #   next if objects.empty?
+
+        #   objects.each do |items|
+        #     next if items.empty?
+
+        #     request_items[t] << {
+        #       delete_request: {
+        #         key: items
+        #       }
+        #     }
+        #   end
+        # end
+
+        # resutls = client.batch_write_item(
+        #   request_items: request_items
+        # )
+
+        # binding.pry
+
         options.each_pair do |table_name, ids|
           table = describe_table(table_name)
           ids.each do |id|
@@ -93,6 +163,7 @@ module Dynamoid
           end
         end
         nil
+        # true
       end
 
       # Create a table on DynamoDB. This usually takes a long time to complete.

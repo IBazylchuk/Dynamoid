@@ -48,7 +48,7 @@ module Dynamoid
       def find_all(ids, options = {})
         self.create_table unless Dynamoid.adapter.tables.include?(self.table_name)
         items = Dynamoid.adapter.read(self.table_name, ids, options)
-        items ? items[self.table_name].map{|i| from_database(i)} : []
+        items && items.present? ? items[self.table_name].map{|i| from_database(i)} : []
       end
 
       # Find one object directly by id.

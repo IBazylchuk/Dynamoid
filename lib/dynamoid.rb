@@ -34,13 +34,17 @@ module Dynamoid
     block_given? ? yield(Dynamoid::Config) : Dynamoid::Config
   end
   alias :config :configure
-  
+
   def logger
     Dynamoid::Config.logger
   end
-  
+
   def included_models
     @included_models ||= []
+  end
+
+  def get_model_by_table_name(table_name)
+    included_models.find { |d| d.table_name == table_name }
   end
 
   def adapter
