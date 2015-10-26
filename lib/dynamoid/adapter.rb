@@ -125,14 +125,24 @@ module Dynamoid
     def delete(table, ids, options = {})
       range_key = options[:range_key] #array of range keys that matches the ids passed in
       if ids.respond_to?(:each)
-        if range_key.respond_to?(:each)
-          #turn ids into array of arrays each element being hash_key, range_key
-          ids = ids.each_with_index.map{|id,i| [id,range_key[i]]}
+        raise Dynamoid::Errors::BatchLimitExceeded if ids.count > 100
+        tables = {}
+        if ids[0].is_a?(Dynamoid::Document)
+          ids.each do |object|
+            tables[object.class.table_name] ||= []
+            tables[object.class.table_name] << (object.range_key? ? [object.hash_key, right_type(object[object.range_key])] : object.hash_key)
+          end
         else
-          ids = range_key ? [[ids, range_key]] : ids
+          if range_key.respond_to?(:each)
+            #turn ids into array of arrays each element being hash_key, range_key
+            ids = ids.each_with_index.map{|id,i| [id,range_key[i]]}
+          else
+            ids = range_key ? [[ids, range_key]] : ids
+          end
+          tables[table] = ids
         end
 
-        batch_delete_item(table => ids)
+        batch_delete_item(tables)
       else
         delete_item(table, ids, options)
       end
@@ -199,6 +209,15 @@ module Dynamoid
       end
 
       Dynamoid::AdapterPlugin.const_get(Dynamoid::Config.adapter.camelcase)
+    end
+
+    def right_type(value)
+      case value.class.to_s
+      when 'DateTime'
+        value.to_f
+      else
+        value
+      end
     end
 
   end

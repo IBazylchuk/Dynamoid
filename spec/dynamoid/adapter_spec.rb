@@ -78,6 +78,10 @@ describe Dynamoid::Adapter do
     expect { subject.write(test_table, alot_ids) }.to raise_error(Dynamoid::Errors::BatchLimitExceeded)
   end
 
+  it 'raise Dynamoid::Errors::BatchLimitExceeded if more then 100 ids' do
+    expect { subject.delete(test_table, alot_ids) }.to raise_error(Dynamoid::Errors::BatchLimitExceeded)
+  end
+
   it 'writes through the adapter for many IDs' do
     expect(subject).to receive(:batch_write_item).with({test_table => many_ids.map { |id| { id: id } } }, nil).and_return(true)
     subject.write(test_table, many_ids.map { |id| { id: id } })
