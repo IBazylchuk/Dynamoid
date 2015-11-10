@@ -80,6 +80,10 @@ module Dynamoid
           if value.is_a?(String)
             options[:serializer] ? options[:serializer].load(value) : YAML.load(value)
           else
+            if value.nil? && (default_value = options[:default])
+              value = default_value.respond_to?(:call) ? default_value.call : default_value
+            end
+
             value
           end
         else
