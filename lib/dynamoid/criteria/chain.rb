@@ -112,10 +112,22 @@ module Dynamoid #:nodoc:
       # @since 0.2.0
       def records
         source.create_table unless table_exists?
-        results = if key_present?
-          records_via_query
-        else
-          records_via_scan
+        retries = 0
+        begin
+          results = if key_present?
+            records_via_query
+          else
+            records_via_scan
+          end
+        rescue Errno::EHOSTUNREACH => e
+          sleep(0.1)
+          retries += 1
+          if retries < 3
+            retry
+          else
+            Airbrake.notify(e, parameters: { retries: retries })
+            results = nil
+          end
         end
         @batch_size ? results : Array(results)
       end

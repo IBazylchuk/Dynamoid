@@ -59,11 +59,11 @@ module Dynamoid
         result = yield
       rescue Errno::EHOSTUNREACH => e
         sleep(0.1)
-        Airbrake.notify(e, parameters: { retries: retries })
         retries += 1
         if retries < 3
           retry
         else
+          Airbrake.notify(e, parameters: { retries: retries })
           result = nil
         end
       end
