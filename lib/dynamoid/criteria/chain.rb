@@ -119,7 +119,7 @@ module Dynamoid #:nodoc:
           else
             records_via_scan
           end
-        rescue Errno::EHOSTUNREACH => e
+        rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
           sleep(0.1)
           retries += 1
           if retries < 3

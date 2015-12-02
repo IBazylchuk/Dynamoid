@@ -57,7 +57,7 @@ module Dynamoid
       retries = 0
       begin
         result = yield
-      rescue Errno::EHOSTUNREACH => e
+      rescue Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
         sleep(0.1)
         retries += 1
         if retries < 3
