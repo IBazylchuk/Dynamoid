@@ -21,6 +21,7 @@ module Dynamoid
       #
       # @since 1.0.0
       def client
+        connect! if @client.nil?
         @client
       end
 
