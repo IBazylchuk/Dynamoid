@@ -173,7 +173,8 @@ module Dynamoid
     def create_table(table_name, key, options = {})
       if !tables.include?(table_name)
         benchmark('Create Table') { adapter.create_table(table_name, key, options) }
-        tables << table_name
+        # tables << table_name
+        reset_cache_tables
       end
     end
 
