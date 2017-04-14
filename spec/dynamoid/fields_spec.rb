@@ -13,11 +13,7 @@ describe Dynamoid::Fields do
   end
 
   it 'declares a query attribute' do
-    expect(address.city?).to be_falsey
 
-    address.city = 'Chicago'
-
-    expect(address.city?).to be_truthy
   end
 
   it 'automatically declares id' do
@@ -30,6 +26,29 @@ describe Dynamoid::Fields do
     address.reload
     expect(address.created_at).to be_a DateTime
     expect(address.updated_at).to be_a DateTime
+  end
+
+  context 'query attributes' do
+    it 'are declared' do
+      expect(address.city?).to be_falsey
+
+      address.city = 'Chicago'
+
+      expect(address.city?).to be_truthy
+    end
+
+    it 'return false when boolean attributes are nil or false' do
+      address.deliverable = nil
+      expect(address.deliverable?).to be_falsey
+
+      address.deliverable = false
+      expect(address.deliverable?).to be_falsey
+    end
+
+    it 'return true when boolean attributes are true' do
+      address.deliverable = true
+      expect(address.deliverable?).to be_truthy
+    end
   end
 
   context 'with a saved address' do
@@ -91,6 +110,7 @@ describe Dynamoid::Fields do
                                         options: {type: :serialized},
                                         deliverable: {type: :boolean},
                                         latitude: {type: :number},
+                                        config: {type: :raw},
                                         lock_version: {type: :integer}})
     end
   end
@@ -127,7 +147,7 @@ describe Dynamoid::Fields do
   end
 
   context 'default values for fields' do
-    let(:doc) do
+    let(:doc_class) do
       Class.new do
         include Dynamoid::Document
 
@@ -137,7 +157,13 @@ describe Dynamoid::Fields do
         def self.name
           'Document'
         end
-      end.new
+      end
+    end
+    let(:doc) { doc_class.new }
+
+    it 'should return default per instance' do
+      doc.name << 'y'
+      expect(doc_class.new.name).to eq('x')
     end
 
     it 'returns default value' do

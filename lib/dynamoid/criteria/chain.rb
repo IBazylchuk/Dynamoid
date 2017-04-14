@@ -5,9 +5,10 @@ module Dynamoid #:nodoc:
     # The criteria chain is equivalent to an ActiveRecord relation (and realistically I should change the name from
     # chain to relation). It is a chainable object that builds up a query and eventually executes it by a Query or Scan.
     class Chain
+      # TODO: Should we transform any other types of query values?
+      TYPES_TO_DUMP_FOR_QUERY = [:string, :integer, :boolean]
       attr_accessor :query, :source, :values, :consistent_read
       include Enumerable
-
       # Create a new criteria chain.
       #
       # @param [Class] source the class upon which the ultimate query will be performed.
@@ -30,7 +31,14 @@ module Dynamoid #:nodoc:
       #
       # @since 0.2.0
       def where(args)
-        args.each {|k, v| query[k.to_sym] = v}
+        args.each do |k, v|
+          sym = k.to_sym
+          query[sym] = if (field_options = source.attributes[sym]) && (type = field_options[:type]) && TYPES_TO_DUMP_FOR_QUERY.include?(type)
+                         source.dump_field(v, field_options)
+                       else
+                         v
+                       end
+        end
         self
       end
 
@@ -165,13 +173,15 @@ module Dynamoid #:nodoc:
 
         case key.to_s.split('.').last
         when 'gt'
-          { :range_greater_than => val.to_f }
+          { :range_greater_than => val }
         when 'lt'
-          { :range_less_than  => val.to_f }
+          { :range_less_than  => val }
         when 'gte'
-          { :range_gte  => val.to_f }
+          { :range_gte  => val }
         when 'lte'
-          { :range_lte => val.to_f }
+          { :range_lte => val }
+        when 'between'
+          { :range_between => val }
         when 'begins_with'
           { :range_begins_with => val }
         when 'between'
@@ -181,7 +191,7 @@ module Dynamoid #:nodoc:
 
       def range_query
         opts = { :hash_value => query[source.hash_key] }
-        if key = query.keys.find { |k| k.to_s.include?('.') }
+        query.keys.select { |k| k.to_s.include?('.') }.each do |key|
           opts.merge!(range_hash(key))
         end
         opts.merge(query_opts).merge(consistent_opts)

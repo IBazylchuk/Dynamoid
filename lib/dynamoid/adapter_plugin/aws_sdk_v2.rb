@@ -3,18 +3,60 @@ module Dynamoid
 
     # The AwsSdkV2 adapter provides support for the aws-sdk version 2 for ruby.
     class AwsSdkV2
+      EQ = "EQ".freeze
+      RANGE_MAP = {
+          range_greater_than: 'GT',
+          range_less_than:    'LT',
+          range_gte:          'GE',
+          range_lte:          'LE',
+          range_begins_with:  'BEGINS_WITH',
+          range_between:      'BETWEEN',
+          range_eq:           'EQ'
+      }
+      HASH_KEY  = "HASH".freeze
+      RANGE_KEY = "RANGE".freeze
+      STRING_TYPE  = "S".freeze
+      NUM_TYPE     = "N".freeze
+      BINARY_TYPE  = "B".freeze
+      TABLE_STATUSES = {
+          creating: "CREATING",
+          updating: "UPDATING",
+          deleting: "DELETING",
+          active: "ACTIVE"
+      }.freeze
+      PARSE_TABLE_STATUS = ->(resp, lookup = :table) {
+        # lookup is table for describe_table API
+        # lookup is table_description for create_table API
+        #   because Amazon, damnit.
+        resp.send(lookup).table_status
+      }
       attr_reader :table_cache
 
       # Establish the connection to DynamoDB.
       #
       # @return [Aws::DynamoDB::Client] the DynamoDB connection
       def connect!
-        @client = if Dynamoid::Config.endpoint?
-          Aws::DynamoDB::Client.new(endpoint: Dynamoid::Config.endpoint)
-        else
-          Aws::DynamoDB::Client.new
-        end
+        @client = Aws::DynamoDB::Client.new(connection_config)
         @table_cache = {}
+      end
+
+      def connection_config
+        @connection_hash = {}
+
+        if Dynamoid::Config.endpoint?
+          @connection_hash[:endpoint] = Dynamoid::Config.endpoint
+        end
+        if Dynamoid::Config.access_key?
+          @connection_hash[:access_key_id] = Dynamoid::Config.access_key
+        end
+        if Dynamoid::Config.secret_key?
+          @connection_hash[:secret_access_key] = Dynamoid::Config.secret_key
+        end
+        if Dynamoid::Config.region?
+          @connection_hash[:region] = Dynamoid::Config.region
+        end
+
+        @connection_hash
       end
 
       # Return the client object.
@@ -23,6 +65,35 @@ module Dynamoid
       def client
         connect! if @client.nil?
         @client
+      end
+
+      # Puts or deletes multiple items in one or more tables
+      #
+      # @param [String] table_name the name of the table
+      # @param [Array]  items to be processed
+      # @param [Hash]   additional options
+      #
+      #See: http://docs.aws.amazon.com/sdkforruby/api/Aws/DynamoDB/Client.html#batch_write_item-instance_method
+      def batch_write_item table_name, objects, options = {}
+        request_items = []
+        options ||= {}
+        objects.each do |o|
+          request_items << { "put_request" => { item: o } }
+        end
+
+        begin
+          client.batch_write_item(
+            {
+              request_items: {
+                table_name => request_items,
+              },
+              return_consumed_capacity: "TOTAL",
+              return_item_collection_metrics: "SIZE"
+            }.merge!(options)
+          )
+        rescue Aws::DynamoDB::Errors::ConditionalCheckFailedException => e
+          raise Dynamoid::Errors::ConditionalCheckFailedException, e
+        end
       end
 
       # Get many items at once from DynamoDB. More efficient than getting each item individually.
@@ -42,37 +113,41 @@ module Dynamoid
         request_items = Hash.new{|h, k| h[k] = []}
         return request_items if table_ids.all?{|k, v| v.empty?}
 
+        ret = Hash.new([].freeze) # Default for tables where no rows are returned
+
         table_ids.each do |t, ids|
           next if ids.empty?
           tbl = describe_table(t)
           hk  = tbl.hash_key.to_s
           rng = tbl.range_key.to_s
 
-          keys = if rng.present?
-            Array(ids).map do |h,r|
-              { hk => h, rng => r }
+          Array(ids).each_slice(Dynamoid::Config.batch_size) do |ids|
+            request_items = Hash.new{|h, k| h[k] = []}
+
+            keys = if rng.present?
+              Array(ids).map do |h,r|
+                { hk => h, rng => r }
+              end
+            else
+              Array(ids).map do |id|
+                { hk => id }
+              end
             end
-          else
-            Array(ids).map do |id|
-              { hk => id }
+
+            request_items[t] = {
+              keys: keys
+            }
+
+            results = client.batch_get_item(
+              request_items: request_items
+            )
+
+            results.data[:responses].each do |table, rows|
+              ret[table] += rows.collect { |r| result_item_to_hash(r) }
             end
           end
-
-          request_items[t] = {
-            keys: keys,
-            consistent_read: options[:consistent_read]
-          }
         end
 
-
-        results = client.batch_get_item(
-          request_items: request_items
-        )
-
-        ret = Hash.new([].freeze) # Default for tables where no rows are returned
-        results.data[:responses].each do |table, rows|
-          ret[table] = rows.collect { |r| result_item_to_hash(r) }
-        end
         ret
       end
 
@@ -164,39 +239,89 @@ module Dynamoid
       # @param [String] table_name the name of the table to create
       # @param [Symbol] key the table's primary key (defaults to :id)
       # @param [Hash] options provide a range key here if the table has a composite key
-      #
+      # @option options [Array<Dynamoid::Indexes::Index>] local_secondary_indexes
+      # @option options [Array<Dynamoid::Indexes::Index>] global_secondary_indexes
+      # @option options [Symbol] hash_key_type The type of the hash key
+      # @option options [Boolean] sync Wait for table status to be ACTIVE?
       # @since 1.0.0
       def create_table(table_name, key = :id, options = {})
         Dynamoid.logger.info "Creating #{table_name} table. This could take a while."
         read_capacity = options[:read_capacity] || Dynamoid::Config.read_capacity
         write_capacity = options[:write_capacity] || Dynamoid::Config.write_capacity
-        hash_key_type = options[:hash_key_type] || :string
-        range_key = options[:range_key]
 
-        key_schema = [
-          { attribute_name: key.to_s, key_type: HASH_KEY }
-        ]
-        key_schema << {
-          attribute_name: range_key.keys.first.to_s, key_type: RANGE_KEY
-        } if(range_key)
+        secondary_indexes = options.slice(
+          :local_secondary_indexes,
+          :global_secondary_indexes
+        )
+        ls_indexes = options[:local_secondary_indexes]
+        gs_indexes = options[:global_secondary_indexes]
 
-        attribute_definitions = [
-          { attribute_name: key.to_s, attribute_type: api_type(hash_key_type) }
-        ]
-        attribute_definitions << {
-          attribute_name: range_key.keys.first.to_s, attribute_type: api_type(range_key.values.first)
-        } if(range_key)
+        key_schema = {
+          :hash_key_schema => { key => (options[:hash_key_type] || :string) },
+          :range_key_schema => options[:range_key]
+        }
+        attribute_definitions = build_all_attribute_definitions(
+          key_schema,
+          secondary_indexes
+        )
+        key_schema = aws_key_schema(
+          key_schema[:hash_key_schema],
+          key_schema[:range_key_schema]
+        )
 
-        client.create_table(table_name: table_name,
+        client_opts = {
+          table_name: table_name,
           provisioned_throughput: {
             read_capacity_units: read_capacity,
             write_capacity_units: write_capacity
           },
           key_schema: key_schema,
           attribute_definitions: attribute_definitions
-        )
+        }
+
+        if ls_indexes.present?
+          client_opts[:local_secondary_indexes] = ls_indexes.map do |index|
+            index_to_aws_hash(index)
+          end
+        end
+
+        if gs_indexes.present?
+          client_opts[:global_secondary_indexes] = gs_indexes.map do |index|
+            index_to_aws_hash(index)
+          end
+        end
+        resp = client.create_table(client_opts)
+        options[:sync] = true if !options.has_key?(:sync) && ls_indexes.present? || gs_indexes.present?
+        until_past_table_status(table_name) if options[:sync] &&
+            (status = PARSE_TABLE_STATUS.call(resp, :table_description)) &&
+            status != TABLE_STATUSES[:creating]
+        # Response to original create_table, which, if options[:sync]
+        #   may have an outdated table_description.table_status of "CREATING"
+        resp
       rescue Aws::DynamoDB::Errors::ResourceInUseException => e
         Dynamoid.logger.error "Table #{table_name} cannot be created as it already exists"
+      end
+
+      # Create a table on DynamoDB *synchronously*.
+      # This usually takes a long time to complete.
+      # CreateTable is normally an asynchronous operation.
+      # You can optionally define secondary indexes on the new table,
+      #   as part of the CreateTable operation.
+      # If you want to create multiple tables with secondary indexes on them,
+      #   you must create the tables sequentially.
+      # Only one table with secondary indexes can be
+      #   in the CREATING state at any given time.
+      # See: http://docs.aws.amazon.com/sdkforruby/api/Aws/DynamoDB/Client.html#create_table-instance_method
+      #
+      # @param [String] table_name the name of the table to create
+      # @param [Symbol] key the table's primary key (defaults to :id)
+      # @param [Hash] options provide a range key here if the table has a composite key
+      # @option options [Array<Dynamoid::Indexes::Index>] local_secondary_indexes
+      # @option options [Array<Dynamoid::Indexes::Index>] global_secondary_indexes
+      # @option options [Symbol] hash_key_type The type of the hash key
+      # @since 1.2.0
+      def create_table_synchronously(table_name, key = :id, options = {})
+        create_table(table_name, key, options.merge(sync: true))
       end
 
       # Removes an item from DynamoDB.
@@ -208,20 +333,40 @@ module Dynamoid
       # @since 1.0.0
       #
       # @todo: Provide support for various options http://docs.aws.amazon.com/sdkforruby/api/Aws/DynamoDB/Client.html#delete_item-instance_method
-      def delete_item(table_name, key, options = nil)
+      def delete_item(table_name, key, options = {})
+        options ||= {}
+        range_key = options[:range_key]
+        conditions = options[:conditions]
         table = describe_table(table_name)
-        client.delete_item(table_name: table_name, key: key_stanza(table, key, options && options[:range_key]))
+        client.delete_item(
+          table_name: table_name,
+          key: key_stanza(table, key, range_key),
+          expected: expected_stanza(conditions)
+        )
+      rescue Aws::DynamoDB::Errors::ConditionalCheckFailedException => e
+        raise Dynamoid::Errors::ConditionalCheckFailedException, e
       end
 
       # Deletes an entire table from DynamoDB.
       #
       # @param [String] table_name the name of the table to destroy
+      # @option options [Boolean] sync Wait for table status check to raise ResourceNotFoundException
       #
       # @since 1.0.0
-      def delete_table(table_name)
-        client.delete_table(table_name: table_name)
-        table_cache.clear
+      def delete_table(table_name, options = {})
+        resp = client.delete_table(table_name: table_name)
+        until_past_table_status(table_name, :deleting) if options[:sync] &&
+            (status = PARSE_TABLE_STATUS.call(resp, :table_description)) &&
+            status != TABLE_STATUSES[:deleting]
+        table_cache.delete(table_name)
         Dynamoid.adapter.reset_cache_tables
+      rescue Aws::DynamoDB::Errors::ResourceInUseException => e
+        Dynamoid.logger.error "Table #{table_name} cannot be deleted as it is in use"
+        raise e
+      end
+
+      def delete_table_synchronously(table_name, options = {})
+        delete_table(table_name, options.merge(sync: true))
       end
 
       # @todo Add a DescribeTable method.
@@ -238,6 +383,7 @@ module Dynamoid
       #
       # @todo Provide support for various options http://docs.aws.amazon.com/sdkforruby/api/Aws/DynamoDB/Client.html#get_item-instance_method
       def get_item(table_name, key, options = {})
+        options ||= {}
         table    = describe_table(table_name)
         range_key = options.delete(:range_key)
 
@@ -293,9 +439,10 @@ module Dynamoid
       #
       # @since 1.0.0
       #
-      # @todo: Provide support for various options http://docs.aws.amazon.com/sdkforruby/api/Aws/DynamoDB/Client.html#put_item-instance_method
-      def put_item(table_name, object, options = nil)
+      # See: http://docs.aws.amazon.com/sdkforruby/api/Aws/DynamoDB/Client.html#put_item-instance_method
+      def put_item(table_name, object, options = {})
         item = {}
+        options ||= {}
 
         object.each do |k, v|
           next if v.nil? || (v.respond_to?(:empty?) && v.empty?)
@@ -303,9 +450,12 @@ module Dynamoid
         end
 
         begin
-          client.put_item(table_name: table_name,
-            item: item,
-            expected: expected_stanza(options)
+          client.put_item(
+            {
+              table_name: table_name,
+              item: item,
+              expected: expected_stanza(options)
+            }.merge!(options)
           )
         rescue Aws::DynamoDB::Errors::ConditionalCheckFailedException => e
           raise Dynamoid::Errors::ConditionalCheckFailedException, e
@@ -332,14 +482,21 @@ module Dynamoid
       # @todo Provide support for various other options http://docs.aws.amazon.com/sdkforruby/api/Aws/DynamoDB/Client.html#query-instance_method
       def query(table_name, opts = {})
         table = describe_table(table_name)
-        hk    = table.hash_key.to_s
-        rng   = table.range_key.to_s
-        q     = opts.slice(:consistent_read, :scan_index_forward, :limit, :select)
+        hk    = (opts[:hash_key].present? ? opts[:hash_key] : table.hash_key).to_s
+        rng   = (opts[:range_key].present? ? opts[:range_key] : table.range_key).to_s
+        q     = opts.slice(
+                  :consistent_read,
+                  :scan_index_forward,
+                  :limit,
+                  :select,
+                  :index_name
+                )
 
         opts.delete(:consistent_read)
         opts.delete(:scan_index_forward)
         opts.delete(:limit)
         opts.delete(:select)
+        opts.delete(:index_name)
 
         opts.delete(:next_token).tap do |token|
           break unless token
@@ -374,24 +531,18 @@ module Dynamoid
         q[:key_conditions] = key_conditions
 
         Enumerator.new { |y|
-          result = client.query(q)
+          loop do
+            results = client.query(q)
+            results.items.each { |row| y << result_item_to_hash(row) }
 
-          result.items.each { |r|
-            y << result_item_to_hash(r)
-          }
+            if(lk = results.last_evaluated_key)
+              q[:exclusive_start_key] = lk
+            else
+              break
+            end
+          end
         }
       end
-
-      EQ = "EQ".freeze
-
-      RANGE_MAP = {
-        range_greater_than: 'GT',
-        range_less_than:    'LT',
-        range_gte:          'GE',
-        range_lte:          'LE',
-        range_begins_with:  'BEGINS_WITH',
-        range_between:      'BETWEEN'
-      }
 
       # Scan the DynamoDB table. This is usually a very slow operation as it naively filters all data on
       # the DynamoDB servers.
@@ -435,7 +586,6 @@ module Dynamoid
         end
       end
 
-
       #
       # Truncates all records in the given table
       #
@@ -448,7 +598,8 @@ module Dynamoid
         rk    = table.range_key
 
         scan(table_name, {}, {}).each do |attributes|
-          opts = {range_key: attributes[rk.to_sym] } if rk
+          opts = {}
+          opts[:range_key] = attributes[rk.to_sym] if rk
           delete_item(table_name, attributes[hk], opts)
         end
       end
@@ -459,19 +610,58 @@ module Dynamoid
 
       protected
 
-      STRING_TYPE  = "S".freeze
-      NUM_TYPE     = "N".freeze
-      BOOLEAN_TYPE = "B".freeze
+      def check_table_status?(counter, resp, expect_status)
+        status = PARSE_TABLE_STATUS.call(resp)
+        again = counter < Dynamoid::Config.sync_retry_max_times &&
+                status == TABLE_STATUSES[expect_status]
+        {again: again, status: status, counter: counter}
+      end
+
+      def until_past_table_status(table_name, status = :creating)
+        counter = 0
+        resp = nil
+        begin
+          check = {again: true}
+          while check[:again]
+            sleep Dynamoid::Config.sync_retry_wait_seconds
+            resp = client.describe_table({ table_name: table_name })
+            check = check_table_status?(counter, resp, status)
+            Dynamoid.logger.info "Checked table status for #{table_name} (check #{check.inspect})"
+            counter += 1
+          end
+        # If you issue a DescribeTable request immediately after a CreateTable
+        #   request, DynamoDB might return a ResourceNotFoundException.
+        # This is because DescribeTable uses an eventually consistent query,
+        #   and the metadata for your table might not be available at that moment.
+        # Wait for a few seconds, and then try the DescribeTable request again.
+        # See: http://docs.aws.amazon.com/sdkforruby/api/Aws/DynamoDB/Client.html#describe_table-instance_method
+        rescue Aws::DynamoDB::Errors::ResourceNotFoundException => e
+          case status
+          when :creating then
+            if counter >= Dynamoid::Config.sync_retry_max_times
+              Dynamoid.logger.warn "Waiting on table metadata for #{table_name} (check #{counter})"
+              retry # start over at first line of begin, does not reset counter
+            else
+              Dynamoid.logger.error "Exhausted max retries (Dynamoid::Config.sync_retry_max_times) waiting on table metadata for #{table_name} (check #{counter})"
+              raise e
+            end
+          else
+            # When deleting a table, "not found" is the goal.
+            Dynamoid.logger.info "Checked table status for #{table_name}: Not Found (check #{check.inspect})"
+          end
+        end
+      end
 
       #Converts from symbol to the API string for the given data type
       # E.g. :number -> 'N'
       def api_type(type)
         case(type)
-        when :string  then STRING_TYPE
-        when :number  then NUM_TYPE
+        when :string then STRING_TYPE
+        when :number then NUM_TYPE
         when :integer  then NUM_TYPE
         when :datetime then NUM_TYPE
-        when :boolean then BOOLEAN_TYPE
+        when :binary then BINARY_TYPE
+        when :boolean then BINARY_TYPE
         else raise "Unknown type: #{type}"
         end
       end
@@ -493,18 +683,15 @@ module Dynamoid
         expected = Hash.new { |h,k| h[k] = {} }
         return expected unless conditions
 
-        conditions[:unless_exists].try(:each) do |col|
+        conditions.delete(:unless_exists).try(:each) do |col|
           expected[col.to_s][:exists] = false
         end
-        conditions[:if].try(:each) do |col,val|
+        conditions.delete(:if).try(:each) do |col,val|
           expected[col.to_s][:value] = val
         end
 
         expected
       end
-
-      HASH_KEY  = "HASH".freeze
-      RANGE_KEY = "RANGE".freeze
 
       #
       # New, semi-arbitrary API to get data on the table
@@ -522,6 +709,153 @@ module Dynamoid
         {}.tap do |r|
           item.each { |k,v| r[k.to_sym] = v }
         end
+      end
+
+      # Converts a Dynamoid::Indexes::Index to an AWS API-compatible hash.
+      # This resulting hash is of the form:
+      #
+      #   {
+      #     index_name: String
+      #     keys: {
+      #       hash_key: aws_key_schema (hash)
+      #       range_key: aws_key_schema (hash)
+      #     }
+      #     projection: {
+      #       projection_type: (ALL, KEYS_ONLY, INCLUDE) String
+      #       non_key_attributes: (optional) Array
+      #     }
+      #     provisioned_throughput: {
+      #       read_capacity_units: Integer
+      #       write_capacity_units: Integer
+      #     }
+      #   }
+      #
+      # @param [Dynamoid::Indexes::Index] index the index.
+      # @return [Hash] hash representing an AWS Index definition.
+      def index_to_aws_hash(index)
+        key_schema = aws_key_schema(index.hash_key_schema, index.range_key_schema)
+
+        hash = {
+          :index_name => index.name,
+          :key_schema => key_schema,
+          :projection => {
+            :projection_type => index.projection_type.to_s.upcase
+          }
+        }
+
+        # If the projection type is include, specify the non key attributes
+        if index.projection_type == :include
+          hash[:projection][:non_key_attributes] = index.projected_attributes
+        end
+
+        # Only global secondary indexes have a separate throughput.
+        if index.type == :global_secondary
+          hash[:provisioned_throughput] = {
+            :read_capacity_units => index.read_capacity,
+            :write_capacity_units => index.write_capacity
+          }
+        end
+        hash
+      end
+
+      # Converts hash_key_schema and range_key_schema to aws_key_schema
+      # @param [Hash] hash_key_schema eg: {:id => :string}
+      # @param [Hash] range_key_schema eg: {:created_at => :number}
+      # @return [Array]
+      def aws_key_schema(hash_key_schema, range_key_schema)
+        schema = [{
+          attribute_name: hash_key_schema.keys.first.to_s,
+          key_type: HASH_KEY
+        }]
+
+        if range_key_schema.present?
+          schema << {
+            attribute_name: range_key_schema.keys.first.to_s,
+            key_type: RANGE_KEY
+          }
+        end
+        schema
+      end
+
+      # Builds aws attributes definitions based off of primary hash/range and
+      # secondary indexes
+      #
+      # @param key_data
+      # @option key_data [Hash] hash_key_schema - eg: {:id => :string}
+      # @option key_data [Hash] range_key_schema - eg: {:created_at => :number}
+      # @param [Hash] secondary_indexes
+      # @option secondary_indexes [Array<Dynamoid::Indexes::Index>] :local_secondary_indexes
+      # @option secondary_indexes [Array<Dynamoid::Indexes::Index>] :global_secondary_indexes
+      def build_all_attribute_definitions(key_schema, secondary_indexes = {})
+        ls_indexes = secondary_indexes[:local_secondary_indexes]
+        gs_indexes = secondary_indexes[:global_secondary_indexes]
+
+        attribute_definitions = []
+
+        attribute_definitions << build_attribute_definitions(
+          key_schema[:hash_key_schema],
+          key_schema[:range_key_schema]
+        )
+
+        if ls_indexes.present?
+          ls_indexes.map do |index|
+            attribute_definitions << build_attribute_definitions(
+              index.hash_key_schema,
+              index.range_key_schema
+            )
+          end
+        end
+
+        if gs_indexes.present?
+          gs_indexes.map do |index|
+            attribute_definitions << build_attribute_definitions(
+              index.hash_key_schema,
+              index.range_key_schema
+            )
+          end
+        end
+
+        attribute_definitions.flatten!
+        # uniq these definitions because range keys might be common between
+        # primary and secondary indexes
+        attribute_definitions.uniq!
+        attribute_definitions
+      end
+
+
+      # Builds an attribute definitions based on hash key and range key
+      # @params [Hash] hash_key_schema - eg: {:id => :string}
+      # @params [Hash] range_key_schema - eg: {:created_at => :datetime}
+      # @return [Array]
+      def build_attribute_definitions(hash_key_schema, range_key_schema = nil)
+        attrs = []
+
+        attrs << attribute_definition_element(
+          hash_key_schema.keys.first,
+          hash_key_schema.values.first
+        )
+
+        if range_key_schema.present?
+          attrs << attribute_definition_element(
+            range_key_schema.keys.first,
+            range_key_schema.values.first
+          )
+        end
+
+        attrs
+      end
+
+      # Builds an aws attribute definition based on name and dynamoid type
+      # @params [Symbol] name - eg: :id
+      # @params [Symbol] dynamoid_type - eg: :string
+      # @return [Hash]
+      def attribute_definition_element(name, dynamoid_type)
+        aws_type = api_type(dynamoid_type)
+
+        {
+          :attribute_name => name.to_s,
+          :attribute_type => aws_type
+        }
       end
 
       #

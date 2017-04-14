@@ -24,6 +24,56 @@ describe Dynamoid::Persistence do
     end
   end
 
+  describe 'delete_table' do
+    it 'deletes the table' do
+      Address.create_table
+      Address.delete_table
+
+      tables = Dynamoid.adapter.list_tables
+      expect(tables.include?(Address.table_name)).to be_falsey
+    end
+  end
+
+  describe 'record deletion' do
+    let(:klass) do
+      Class.new do
+        include Dynamoid::Document
+        table :name => :addresses
+        field :city
+
+        before_destroy {|i| false }
+      end
+    end
+
+    describe 'destroy' do
+      it 'deletes an item completely' do
+        @user = User.create(:name => 'Josh')
+        @user.destroy
+
+        expect(Dynamoid.adapter.read("dynamoid_tests_users", @user.id)).to be_nil
+      end
+
+      it 'returns false when destroy fails (due to callback)' do
+        a = klass.create!
+        expect(a.destroy).to eql false
+        expect(klass.first.id).to eql a.id
+      end
+    end
+
+    describe 'destroy!' do
+      it 'deletes the item' do
+        address.save!
+        address.destroy!
+        expect(Address.count).to eql 0
+      end
+
+      it 'raises exception when destroy fails (due to callback)' do
+        a = klass.create!
+        expect { a.destroy! }.to raise_error(Dynamoid::Errors::RecordNotDestroyed)
+      end
+    end
+  end
+
   it 'assigns itself an id on save' do
     address.save
 
@@ -53,6 +103,64 @@ describe Dynamoid::Persistence do
     expect(Address.table_name).to eq 'dynamoid_tests_addresses'
   end
 
+  context 'with namespace is empty' do
+    def reload_address
+      Object.send(:remove_const, 'Address')
+      load 'app/models/address.rb'
+    end
+
+    namespace = Dynamoid::Config.namespace
+
+    before do
+      reload_address
+      Dynamoid.configure do |config|
+        config.namespace = ""
+      end
+    end
+
+    after do
+      reload_address
+      Dynamoid.configure do |config|
+        config.namespace = namespace
+      end
+    end
+
+    it 'does not add a namespace prefix to table names' do
+      table_name = Address.table_name
+      expect(Dynamoid::Config.namespace).to be_empty
+      expect(table_name).to eq 'addresses'
+    end
+  end
+
+  context 'with timestamps set to false' do
+    def reload_address
+      Object.send(:remove_const, 'Address')
+      load 'app/models/address.rb'
+    end
+
+    timestamps = Dynamoid::Config.timestamps
+
+    before do
+      reload_address
+      Dynamoid.configure do |config|
+        config.timestamps = false
+      end
+    end
+
+    after do
+      reload_address
+      Dynamoid.configure do |config|
+        config.timestamps = timestamps
+      end
+    end
+
+    it 'sets nil to created_at and updated_at' do
+      address = Address.create
+      expect(address.created_at).to be_nil
+      expect(address.updated_at).to be_nil
+    end
+  end
+
   it 'deletes an item completely' do
     @user = User.create(:name => 'Josh')
     @user.destroy
@@ -63,6 +171,56 @@ describe Dynamoid::Persistence do
   it 'keeps string attributes as strings' do
     @user = User.new(:name => 'Josh')
     expect(@user.send(:dump)[:name]).to eq 'Josh'
+  end
+
+  it 'keeps raw Hash attributes as a Hash' do
+    config = {:acres => 5, :trees => {:cyprus => 30, :poplar => 10, :joshua => 1}, :horses => ['Lucky', 'Dummy'], :lake => 1, :tennis_court => 1}
+    @addr = Address.new(:config => config)
+    expect(@addr.send(:dump)[:config]).to eq config
+  end
+
+  it 'keeps raw Array attributes as an Array' do
+    config = ['windows', 'roof', 'doors']
+    @addr = Address.new(:config => config)
+    expect(@addr.send(:dump)[:config]).to eq config
+  end
+
+  it 'keeps raw String attributes as a String' do
+    config = 'Configy'
+    @addr = Address.new(:config => config)
+    expect(@addr.send(:dump)[:config]).to eq config
+  end
+
+  it 'keeps raw Number attributes as a Number' do
+    config = 100
+    @addr = Address.new(:config => config)
+    expect(@addr.send(:dump)[:config]).to eq config
+  end
+
+  context "transforms booleans" do
+    it 'handles true' do
+      deliverable = true
+      @addr = Address.new(:deliverable => deliverable)
+      expect(@addr.send(:dump)[:deliverable]).to eq 't'
+    end
+
+    it 'handles false' do
+      deliverable = false
+      @addr = Address.new(:deliverable => deliverable)
+      expect(@addr.send(:dump)[:deliverable]).to eq 'f'
+    end
+
+    it 'handles t' do
+      deliverable = 't'
+      @addr = Address.new(:deliverable => deliverable)
+      expect(@addr.send(:dump)[:deliverable]).to eq 't'
+    end
+
+    it 'handles f' do
+      deliverable = 'f'
+      @addr = Address.new(:deliverable => deliverable)
+      expect(@addr.send(:dump)[:deliverable]).to eq 'f'
+    end
   end
 
   it 'dumps datetime attributes' do
@@ -79,7 +237,7 @@ describe Dynamoid::Persistence do
     @subscription = Subscription.create(:length => 10)
     @magazine = @subscription.magazine.create
 
-    expect(@subscription.send(:dump)[:magazine_ids]).to eq Set[@magazine.id]
+    expect(@subscription.send(:dump)[:magazine_ids]).to eq Set[@magazine.hash_key]
   end
 
   it 'handles nil attributes properly' do
@@ -328,6 +486,32 @@ describe Dynamoid::Persistence do
         msg.destroy
       end.to_not raise_error
     end
+
+    context 'with lock version' do
+      it 'deletes a record if lock version matches' do
+        address.save!
+        expect { address.destroy }.to_not raise_error
+      end
+
+      it 'does not delete a record if lock version does not match' do
+        address.save!
+        a1 = address
+        a2 = Address.find(address.id)
+
+        a1.city = 'Seattle'
+        a1.save!
+
+        expect { a2.destroy }.to raise_exception(Dynamoid::Errors::StaleObjectError)
+      end
+
+      it 'uses the correct lock_version even if it is modified' do
+        address.save!
+        a1 = address
+        a1.lock_version = 100
+
+        expect { a1.destroy }.to_not raise_error
+      end
+    end
   end
 
   context 'single table inheritance' do
@@ -347,6 +531,55 @@ describe Dynamoid::Persistence do
         expect(v).to include(c)
         expect(v).to include(s)
       }
+    end
+  end
+
+  describe ':raw datatype persistence' do
+    subject { Address.new() }
+
+    it 'it persists raw Hash and reads the same back' do
+      config = {:acres => 5, :trees => {:cyprus => 30, :poplar => 10, :joshua => 1}, :horses => ['Lucky', 'Dummy'], :lake => 1, :tennis_court => 1}
+      subject.config = config
+      subject.save!
+      subject.reload
+      expect(subject.config).to eq config
+    end
+
+    it 'it persists raw Array and reads the same back' do
+      config = ['windows', 'doors', 'roof']
+      subject.config = config
+      subject.save!
+      subject.reload
+      expect(subject.config).to eq config
+    end
+
+    it 'it persists raw Number and reads the same back' do
+      config = 100
+      subject.config = config
+      subject.save!
+      subject.reload
+      expect(subject.config).to eq config
+    end
+
+    it 'it persists raw String and reads the same back' do
+      config = 'Configy'
+      subject.config = config
+      subject.save!
+      subject.reload
+      expect(subject.config).to eq config
+    end
+
+    it 'it persists raw value, then reads back, then deletes the value by setting to nil, persists and reads the nil back' do
+      config = 'To become nil'
+      subject.config = config
+      subject.save!
+      subject.reload
+      expect(subject.config).to eq config
+
+      subject.config = nil
+      subject.save!
+      subject.reload
+      expect(subject.config).to be_nil
     end
   end
 

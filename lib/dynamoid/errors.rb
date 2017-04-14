@@ -9,6 +9,29 @@ module Dynamoid
 
     class MissingRangeKey < Error; end
 
+    class MissingIndex < Error; end
+
+    # InvalidIndex is raised when an invalid index is specified, for example if
+    # specified key attribute(s) or projected attributes do not exist.
+    class InvalidIndex < Error
+      def initialize(item)
+        if (item.is_a? String)
+          super(item)
+        else
+          super("Validation failed: #{item.errors.full_messages.join(", ")}")
+        end
+      end
+    end
+
+    class RecordNotDestroyed < Error
+      attr_reader :record
+
+      def initialize(record)
+        super("Failed to destroy item")
+        @record = record
+      end
+    end
+
     # This class is intended to be private to Dynamoid.
     class ConditionalCheckFailedException < Error
       attr_reader :inner_exception
@@ -39,8 +62,11 @@ module Dynamoid
     end
 
     class DocumentNotValid < Error
+      attr_reader :document
+
       def initialize(document)
         super("Validation failed: #{document.errors.full_messages.join(", ")}")
+        @document = document
       end
     end
 

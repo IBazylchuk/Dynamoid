@@ -16,7 +16,10 @@ module Dynamoid
     module ClassMethods
 
       def table_name
-        @table_name ||= "#{Dynamoid::Config.namespace}_#{options[:name] || base_class.name.split('::').last.downcase.pluralize}"
+        table_base_name = options[:name] || base_class.name.split('::').last
+          .downcase.pluralize
+
+        @table_name ||= [Dynamoid::Config.namespace.to_s,table_base_name].reject(&:empty?).join("_")
       end
 
       # Creates a table.
@@ -27,7 +30,7 @@ module Dynamoid
       # @option options [Integer] :read_capacity set the read capacity for the table; does not work on existing tables
       # @option options [Integer] :write_capacity set the write capacity for the table; does not work on existing tables
       # @option options [Hash] {range_key => :type} a hash of the name of the range key and a symbol of its type
-      #
+      # @option options [Symbol] :hash_key_type the dynamo type of the hash key (:string or :number)
       # @since 0.4.0
       def create_table(options = {})
         if self.range_key
@@ -41,11 +44,18 @@ module Dynamoid
           :table_name => self.table_name,
           :write_capacity => self.write_capacity,
           :read_capacity => self.read_capacity,
-          :hash_key_type => self.hash_key_type,
-          :range_key => range_key_hash
+          :range_key => range_key_hash,
+          :hash_key_type => dynamo_type(attributes[self.hash_key][:type]),
+          :local_secondary_indexes => self.local_secondary_indexes.values,
+          :global_secondary_indexes => self.global_secondary_indexes.values
         }.merge(options)
 
         Dynamoid.adapter.create_table(options[:table_name], options[:id], options)
+      end
+
+      # Deletes the table for the model
+      def delete_table
+        Dynamoid.adapter.delete_table(self.table_name)
       end
 
       def from_database(attrs = {})
@@ -88,10 +98,10 @@ module Dynamoid
           end
         else
           if value.nil? && (default_value = options[:default])
-            value = default_value.respond_to?(:call) ? default_value.call : default_value
+            value = default_value.respond_to?(:call) ? default_value.call : default_value.dup
           end
 
-          if !value.nil?
+          unless value.nil?
             case options[:type]
               when :string
                 value.to_s
@@ -101,6 +111,12 @@ module Dynamoid
                 BigDecimal.new(value.to_s)
               when :array
                 value.to_a
+              when :raw
+                if value.is_a?(Hash)
+                  undump_hash(value)
+                else
+                  value
+                end
               when :set
                 Set.new(value)
               when :datetime
@@ -125,6 +141,41 @@ module Dynamoid
         end
       end
 
+      def dump_field(value, options)
+        if (field_class = options[:type]).is_a?(Class)
+          if value.respond_to?(:dynamoid_dump)
+            value.dynamoid_dump
+          elsif field_class.respond_to?(:dynamoid_dump)
+            field_class.dynamoid_dump(value)
+          else
+            raise ArgumentError, "Neither #{field_class} nor #{value} support serialization for Dynamoid."
+          end
+        else
+          case options[:type]
+            when :string
+              !value.nil? ? value.to_s : nil
+            when :integer
+              !value.nil? ? Integer(value) : nil
+            when :number
+              !value.nil? ? value : nil
+            when :set
+              !value.nil? ? Set.new(value) : nil
+            when :array
+              !value.nil? ? value : nil
+            when :datetime
+              !value.nil? ? value.to_time.to_f : nil
+            when :serialized
+              options[:serializer] ? options[:serializer].dump(value) : value.to_yaml
+            when :raw
+              !value.nil? ? value : nil
+            when :boolean
+              !value.nil? ? value.to_s[0] : nil
+            else
+              raise ArgumentError, "Unknown type #{options[:type]}"
+          end
+        end
+      end
+
       def dynamo_type(type)
         if type.is_a?(Class)
           type.respond_to?(:dynamoid_field_type) ? type.dynamoid_field_type : :string
@@ -140,6 +191,30 @@ module Dynamoid
         end
       end
 
+      private
+
+      def undump_hash(hash)
+        {}.tap do |h|
+          hash.each { |key, value| h[key.to_sym] = undump_hash_value(value) }
+        end
+      end
+
+      def undump_hash_value(val)
+        case val
+        when BigDecimal
+          if Dynamoid::Config.convert_big_decimal
+            val.to_f
+          else
+            val
+          end
+        when Hash
+          undump_hash(val)
+        when Array
+          val.map { |v| undump_hash_value(v) }
+        else
+          val
+        end
+      end
     end
 
     # Set updated_at and any passed in field to current DateTime. Useful for things like last_login_at, etc.
@@ -223,10 +298,14 @@ module Dynamoid
     #
     # @since 0.2.0
     def destroy
-      run_callbacks(:destroy) do
+      ret = run_callbacks(:destroy) do
         self.delete
       end
-      self
+      (ret == false) ? false : self
+    end
+
+    def destroy!
+      destroy || raise(Dynamoid::Errors::RecordNotDestroyed.new(self))
     end
 
     # Delete this object from the datastore.
@@ -234,7 +313,21 @@ module Dynamoid
     # @since 0.2.0
     def delete
       options = range_key ? {:range_key => dump_field(self.read_attribute(range_key), self.class.attributes[range_key])} : {}
+
+      # Add an optimistic locking check if the lock_version column exists
+      if(self.class.attributes[:lock_version])
+        conditions = {:if => {}}
+        conditions[:if][:lock_version] =
+          if changes[:lock_version].nil?
+            self.lock_version
+          else
+            changes[:lock_version][0]
+          end
+        options[:conditions] = conditions
+      end
       Dynamoid.adapter.delete(self.class.table_name, self.hash_key, options)
+    rescue Dynamoid::Errors::ConditionalCheckFailedException
+      raise Dynamoid::Errors::StaleObjectError.new(self, 'delete')
     end
 
     # Dump this object's attributes into hash form, fit to be persisted into the datastore.
@@ -255,36 +348,7 @@ module Dynamoid
     #
     # @since 0.2.0
     def dump_field(value, options)
-      if (field_class = options[:type]).is_a?(Class)
-        if value.respond_to?(:dynamoid_dump)
-          value.dynamoid_dump
-        elsif field_class.respond_to?(:dynamoid_dump)
-          field_class.dynamoid_dump(value)
-        else
-          raise ArgumentError, "Neither #{field_class} nor #{value} support serialization for Dynamoid."
-        end
-      else
-        case options[:type]
-          when :string
-            !value.nil? ? value.to_s : nil
-          when :integer
-            !value.nil? ? Integer(value) : nil
-          when :number
-            !value.nil? ? value : nil
-          when :set
-            !value.nil? ? Set.new(value) : nil
-          when :array
-            !value.nil? ? value : nil
-          when :datetime
-            !value.nil? ? value.to_time.to_f : nil
-          when :serialized
-            options[:serializer] ? options[:serializer].dump(value) : value.to_yaml
-          when :boolean
-            !value.nil? ? value.to_s[0] : nil
-          else
-            raise ArgumentError, "Unknown type #{options[:type]}"
-        end
-      end
+      self.class.dump_field(value, options)
     end
 
     # Persist the object into the datastore. Assign it an id first if it doesn't have one.

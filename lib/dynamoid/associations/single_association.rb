@@ -9,7 +9,7 @@ module Dynamoid #:nodoc:
 
       def setter(object)
         delete
-        source.update_attribute(source_attribute, Set[object.id])
+        source.update_attribute(source_attribute, Set[object.hash_key])
         self.send(:associate_target, object) if target_association
         object
       end
@@ -25,7 +25,7 @@ module Dynamoid #:nodoc:
       end
 
       def create(attributes = {})
-        setter(target_class.create!(attributes))
+        setter(target_class.create(attributes))
       end
 
 
@@ -50,6 +50,12 @@ module Dynamoid #:nodoc:
       end
 
       def nil?
+        target.nil?
+      end
+
+      def empty?
+        # This is needed to that ActiveSupport's #blank? and #present?
+        # methods work as expected for SingleAssociations.
         target.nil?
       end
 

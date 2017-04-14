@@ -13,6 +13,7 @@ describe Dynamoid::Document do
                                       options: nil,
                                       deliverable: nil,
                                       latitude: nil,
+                                      config: nil,
                                       lock_version: nil})
   end
 
@@ -36,6 +37,7 @@ describe Dynamoid::Document do
                                       options: nil,
                                       deliverable: nil,
                                       latitude: nil,
+                                      config: nil,
                                       lock_version: nil})
   end
 
@@ -51,6 +53,7 @@ describe Dynamoid::Document do
                                       options: nil,
                                       deliverable: nil,
                                       latitude: nil,
+                                      config: nil,
                                       lock_version: nil})
   end
 
@@ -61,6 +64,16 @@ describe Dynamoid::Document do
       def city=(value); self[:city] = value.downcase; end
     end
     expect(Model.new(:city => "Chicago").city).to eq "chicago"
+  end
+
+  it 'ignores unknown fields (does not raise error)' do
+    class Model
+      include Dynamoid::Document
+      field :city
+    end
+
+    model = Model.new(:unknown_field => "test", :city => "Chicago")
+    expect(model.city).to eql "Chicago"
   end
 
   it 'creates a new document' do

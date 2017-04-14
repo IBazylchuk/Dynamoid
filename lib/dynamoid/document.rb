@@ -76,7 +76,7 @@ module Dynamoid #:nodoc:
       #
       # @since 0.2.0
       def create(attrs = {})
-        attrs[:type] ? attrs[:type].constantize.new(attrs).tap(&:save) : new(attrs).tap(&:save)
+        build(attrs).tap(&:save)
       end
 
       # Initialize a new object and immediately save it to the database. Raise an exception if persistence failed.
@@ -87,7 +87,7 @@ module Dynamoid #:nodoc:
       #
       # @since 0.2.0
       def create!(attrs = {})
-        attrs[:type] ? attrs[:type].constantize.new(attrs).tap(&:save!) : new(attrs).tap(&:save!)
+        build(attrs).tap(&:save!)
       end
 
       # Initialize a new object.
@@ -146,7 +146,9 @@ module Dynamoid #:nodoc:
     end
 
     def load(attrs)
-      self.class.undump(attrs).each {|key, value| send "#{key}=", value }
+      self.class.undump(attrs).each do |key, value|
+        send("#{key}=", value) if self.respond_to?("#{key}=")
+      end
     end
 
     # An object is equal to another object if their ids are equal.

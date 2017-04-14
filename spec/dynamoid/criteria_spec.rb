@@ -1,8 +1,8 @@
 require File.expand_path(File.dirname(__FILE__) + '/../spec_helper')
 
 describe Dynamoid::Criteria do
-  let!(:user1) {User.create(:name => 'Josh', :email => 'josh@joshsymonds.com')}
-  let!(:user2) {User.create(:name => 'Justin', :email => 'justin@joshsymonds.com')}
+  let!(:user1) {User.create(:name => 'Josh', :email => 'josh@joshsymonds.com', admin: true)}
+  let!(:user2) {User.create(:name => 'Justin', :email => 'justin@joshsymonds.com', admin: false)}
 
   it 'finds first using where' do
     expect(User.where(:name => 'Josh').first).to eq user1
@@ -10,6 +10,20 @@ describe Dynamoid::Criteria do
 
   it 'finds all using where' do
     expect(User.where(:name => 'Josh').all).to eq [user1]
+  end
+
+  context "transforms booleans" do
+    it 'accepts native' do
+      expect(User.where(:admin => 't').all).to eq [user1]
+    end
+
+    it 'accepts string' do
+      expect(User.where(:admin => 'true').all).to eq [user1]
+    end
+
+    it 'accepts boolean' do
+      expect(User.where(:admin => true).all).to eq [user1]
+    end
   end
 
   it 'returns all records' do
@@ -52,4 +66,22 @@ describe Dynamoid::Criteria do
   #  all = User.where(:name => 'Josh').all
   #  User.where(:name => 'Josh').start(all[3]).all.should eq(all[4..-1])
   #end
+
+  it 'send consistent option to adapter' do
+    pending "This test is broken as we are overriding the consistent_read option to true inside the adapter"
+    expect(Dynamoid::Adapter).to receive(:get_item) { |table_name, key, options| options[:consistent_read] == true }
+    User.where(:name => 'x').consistent.first
+
+    expect(Dynamoid::Adapter).to receive(:query) { |table_name, options| options[:consistent_read] == true }.returns([])
+    Tweet.where(:tweet_id => 'xx', :group => 'two').consistent.all
+
+    expect(Dynamoid::Adapter).to receive(:query) { |table_name, options| options[:consistent_read] == false }.returns([])
+    Tweet.where(:tweet_id => 'xx', :group => 'two').all
+  end
+
+  it 'raises exception when consistent_read is used with scan' do
+    expect do
+      User.where(:password => 'password').consistent.first
+    end.to raise_error(Dynamoid::Errors::InvalidQuery)
+  end
 end

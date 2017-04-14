@@ -52,6 +52,12 @@ describe Dynamoid::AdapterPlugin::AwsSdkV2 do
     it 'performs query on a table with a range and selects items lte' do
       expect(Dynamoid.adapter.query(test_table3, :hash_value => '1', :range_lte => 3.0).to_a).to eq [{:id => '1', :range => BigDecimal.new(1)}, {:id => '1', :range => BigDecimal.new(3)}]
     end
+
+    it 'performs query on a table with a range and selects all items' do
+      200.times { |i| Dynamoid.adapter.put_item(test_table3, {:id => "1", :range => i.to_f, :data => "A"*1024*16}) }
+      # 64 of these items will exceed the 1MB result limit thus query won't return all results on first loop
+      expect(Dynamoid.adapter.query(test_table3, :hash_value => '1', :range_gte => 0.0).count).to eq(200)
+    end
   end
 
   #
@@ -97,6 +103,76 @@ describe Dynamoid::AdapterPlugin::AwsSdkV2 do
       expect(Dynamoid.adapter.list_tables).to include 'CreateTable'
 
       Dynamoid.adapter.delete_table('CreateTable')
+    end
+
+    describe 'create table with secondary index' do
+      let(:doc_class) do
+        Class.new do
+          include Dynamoid::Document
+          range :range => :number
+          field :range2
+          field :hash2
+        end
+      end
+
+      it 'creates table with local_secondary_index' do
+        # setup
+        doc_class.table({:name => 'table_lsi', :key => :id})
+        doc_class.local_secondary_index ({
+          :range_key => :range2,
+        })
+
+        Dynamoid.adapter.create_table('table_lsi', :id, {
+          :local_secondary_indexes => doc_class.local_secondary_indexes.values,
+          :range_key => { :range => :number }
+        })
+
+        # execute
+        resp = Dynamoid.adapter.client.describe_table(table_name: 'table_lsi')
+        data = resp.data
+        lsi = data.table.local_secondary_indexes.first
+
+        # test
+        expect(Dynamoid::AdapterPlugin::AwsSdkV2::PARSE_TABLE_STATUS.call(resp)).to eq(Dynamoid::AdapterPlugin::AwsSdkV2::TABLE_STATUSES[:active])
+        expect(lsi.index_name).to eql "dynamoid_tests_table_lsi_index_id_range2"
+        expect(lsi.key_schema.map(&:to_hash)).to eql [
+          {:attribute_name=>"id", :key_type=>"HASH"},
+          {:attribute_name=>"range2", :key_type=>"RANGE"}
+        ]
+        expect(lsi.projection.to_hash).to eql ({:projection_type=>"KEYS_ONLY"})
+      end
+
+      it 'creates table with global_secondary_index' do
+        # setup
+        doc_class.table({:name => 'table_gsi', :key => :id})
+        doc_class.global_secondary_index ({
+          :hash_key => :hash2,
+          :range_key => :range2,
+          :write_capacity => 10,
+          :read_capacity => 20
+
+        })
+        Dynamoid.adapter.create_table('table_gsi', :id, {
+          :global_secondary_indexes => doc_class.global_secondary_indexes.values,
+          :range_key => { :range => :number }
+        })
+
+        # execute
+        resp = Dynamoid.adapter.client.describe_table(table_name: 'table_gsi')
+        data = resp.data
+        gsi = data.table.global_secondary_indexes.first
+
+        # test
+        expect(Dynamoid::AdapterPlugin::AwsSdkV2::PARSE_TABLE_STATUS.call(resp)).to eq(Dynamoid::AdapterPlugin::AwsSdkV2::TABLE_STATUSES[:active])
+        expect(gsi.index_name).to eql "dynamoid_tests_table_gsi_index_hash2_range2"
+        expect(gsi.key_schema.map(&:to_hash)).to eql [
+          {:attribute_name=>"hash2", :key_type=>"HASH"},
+          {:attribute_name=>"range2", :key_type=>"RANGE"}
+        ]
+        expect(gsi.projection.to_hash).to eql ({:projection_type=>"KEYS_ONLY"})
+        expect(gsi.provisioned_throughput.write_capacity_units).to eql 10
+        expect(gsi.provisioned_throughput.read_capacity_units).to eql 20
+      end
     end
   end
 
@@ -204,6 +280,22 @@ describe Dynamoid::AdapterPlugin::AwsSdkV2 do
       expect(results[test_table2]).to include({:name => 'Justin', :id => '1'})
     end
 
+    it 'performs BatchGetItem with ranges of 100 keys' do
+      table_ids = []
+
+      (1..101).each do |i|
+        id, range = i.to_s, i.to_f
+        Dynamoid.adapter.put_item(test_table3, {:id => id, :name => "Josh_#{i}", :range => range})
+        table_ids << [id, range]
+      end
+
+      results = Dynamoid.adapter.batch_get_item(test_table3 => table_ids)
+
+      expect(results.size).to eq 1
+
+      expect(results[test_table3]).to include({:name => 'Josh_101', :id => '101', :range => 101.0})
+    end
+
     # BatchDeleteItem
     it "performs BatchDeleteItem with singular keys" do
       Dynamoid.adapter.put_item(test_table1, {:id => '1', :name => 'Josh'})
@@ -303,6 +395,30 @@ describe Dynamoid::AdapterPlugin::AwsSdkV2 do
       Dynamoid.adapter.put_item(test_table1, {:id => '2', :name => 'Josh'})
 
       expect(Dynamoid.adapter.scan(test_table1, {})).to include({:name=>"Josh", :id=>"2"}, {:name=>"Josh", :id=>"1"})
+    end
+
+    # Truncate
+    it 'performs truncate on an existing table' do
+      Dynamoid.adapter.put_item(test_table1, {:id => '1', :name => 'Josh'})
+      Dynamoid.adapter.put_item(test_table1, {:id => '2', :name => 'Pascal'})
+
+      expect(Dynamoid.adapter.get_item(test_table1, '1')).to eq({:name => 'Josh', :id => '1'})
+      expect(Dynamoid.adapter.get_item(test_table1, '2')).to eq({:name => 'Pascal', :id => '2'})
+
+      Dynamoid.adapter.truncate(test_table1)
+
+      expect(Dynamoid.adapter.get_item(test_table1, '1')).to be_nil
+      expect(Dynamoid.adapter.get_item(test_table1, '2')).to be_nil
+    end
+
+    it 'performs truncate on an existing table with a range key' do
+      Dynamoid.adapter.put_item(test_table3, {:id => '1', :name => 'Josh', :range => 1.0})
+      Dynamoid.adapter.put_item(test_table3, {:id => '2', :name => 'Justin', :range => 2.0})
+
+      Dynamoid.adapter.truncate(test_table3)
+
+      expect(Dynamoid.adapter.get_item(test_table3, '1', :range_key => 1.0)).to be_nil
+      expect(Dynamoid.adapter.get_item(test_table3, '2', :range_key => 2.0)).to be_nil
     end
 
     it_behaves_like 'correct ordering'

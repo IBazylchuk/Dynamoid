@@ -1,10 +1,17 @@
 # encoding: utf-8
 module Dynamoid #:nodoc:
-
   # All fields on a Dynamoid::Document must be explicitly defined -- if you have fields in the database that are not
   # specified with field, then they will be ignored.
   module Fields
     extend ActiveSupport::Concern
+
+    # Types allowed in indexes:
+    PERMITTED_KEY_TYPES = [
+      :number,
+      :integer,
+      :string,
+      :datetime
+    ]
 
     # Initialize the attributes we know the class has, in addition to our magic attributes: id, created_at, and updated_at.
     included do
@@ -45,7 +52,15 @@ module Dynamoid #:nodoc:
         self.attributes = attributes.merge(name => {:type => type}.merge(options))
 
         define_method(named) { read_attribute(named) }
-        define_method("#{named}?") { !read_attribute(named).nil? }
+        define_method("#{named}?") do
+          value = read_attribute(named)
+          case value
+          when true        then true
+          when false, nil  then false
+          else
+            !value.nil?
+          end
+        end
         define_method("#{named}=") {|value| write_attribute(named, value) }
       end
 
@@ -131,14 +146,14 @@ module Dynamoid #:nodoc:
     #
     # @since 0.2.0
     def set_created_at
-      self.created_at = DateTime.now
+      self.created_at = DateTime.now.in_time_zone(Time.zone) if Dynamoid::Config.timestamps
     end
 
     # Automatically called during the save callback to set the updated_at time.
     #
     # @since 0.2.0
     def set_updated_at
-      self.updated_at = DateTime.now
+      self.updated_at = DateTime.now.in_time_zone(Time.zone) if Dynamoid::Config.timestamps
     end
 
     def set_type
