@@ -359,7 +359,7 @@ module Dynamoid
             (status = PARSE_TABLE_STATUS.call(resp, :table_description)) &&
             status != TABLE_STATUSES[:deleting]
         table_cache.delete(table_name)
-        Dynamoid.adapter.reset_cache_tables
+        # Dynamoid.adapter.reset_cache_tables
       rescue Aws::DynamoDB::Errors::ResourceInUseException => e
         Dynamoid.logger.error "Table #{table_name} cannot be deleted as it is in use"
         raise e
