@@ -221,7 +221,7 @@ module Dynamoid
     #
     def touch(name = nil)
       now = DateTime.now
-      self.updated_at = now
+      self.updated_at = now if self.respond_to?(:updated_at)
       attributes[name] = now if name
       save
     end
