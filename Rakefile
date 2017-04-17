@@ -8,9 +8,9 @@ rescue Bundler::BundlerError => e
   $stderr.puts "Run `bundle install` to install missing gems"
   exit e.status_code
 end
-if defined?(Rails)
-  load "./lib/dynamoid/tasks/database.rake"
-end
+# if defined?(Rails)
+#   load "./lib/dynamoid/tasks/database.rake"
+# end
 
 require "rake"
 require "rspec/core/rake_task"
@@ -21,25 +21,6 @@ end
 RSpec::Core::RakeTask.new(:rcov) do |spec|
   spec.pattern = "spec/**/*_spec.rb"
   spec.rcov = true
-end
-
-desc "Start DynamoDBLocal, run tests, clean up"
-task :unattended_spec do |t|
-
-  if system("bin/start_dynamodblocal")
-    puts "DynamoDBLocal started; proceeding with specs."
-  else
-    raise "Unable to start DynamoDBLocal.  Cannot run unattended specs."
-  end
-
-  #Cleanup
-  at_exit do
-    unless system("bin/stop_dynamodblocal")
-      $stderr.puts "Unable to cleanly stop DynamoDBLocal."
-    end
-  end
-
-  Rake::Task["spec"].invoke
 end
 
 require "yard"
