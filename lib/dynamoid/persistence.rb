@@ -98,7 +98,13 @@ module Dynamoid
           end
         else
           if value.nil? && (default_value = options[:default])
-            value = default_value.respond_to?(:call) ? default_value.call : (default_value.is_a?(Fixnum) ? default_value : default_value.dup)
+            value = if default_value.respond_to?(:call)
+              default_value.call
+            elsif default_value.class.in?([Fixnum, Integer, Numeric, Float, NilClass, Symbol])
+              default_value
+            else
+              default_value.dup
+            end
           end
 
           unless value.nil?
