@@ -165,7 +165,7 @@ module Dynamoid #:nodoc:
     end
 
     def set_ttl
-      self[self.class.ttl_column] = DateTime.now.in_time_zone(Time.zone) + self.class.ttl_range if self.class.ttl_column && self.respond_to?(self.class.ttl_column)
+      self[self.class.ttl_column] ||= DateTime.now.in_time_zone(Time.zone) + self.class.ttl_range if self.class.ttl_column && self.respond_to?(self.class.ttl_column)
     end
   end
 
