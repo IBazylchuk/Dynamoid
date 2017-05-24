@@ -1,3 +1,3 @@
 module Dynamoid
-  VERSION = "1.3.1.7"
+  VERSION = "1.3.1.8"
 end

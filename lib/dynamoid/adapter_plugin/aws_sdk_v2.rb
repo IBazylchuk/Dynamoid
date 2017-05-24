@@ -697,6 +697,7 @@ module Dynamoid
       # New, semi-arbitrary API to get data on the table
       #
       def describe_table(table_name, reload = false)
+        @table_cache ||= {}
         (!reload && table_cache[table_name]) || begin
           table_cache[table_name] = Table.new(client.describe_table(table_name: table_name).data)
         end
