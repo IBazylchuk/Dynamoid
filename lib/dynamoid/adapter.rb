@@ -88,8 +88,8 @@ module Dynamoid
           tables = {}
           if objects[0].is_a?(Dynamoid::Document)
             objects.each do |object|
-              object.created_at = DateTime.now.to_f
-              object.updated_at = DateTime.now.to_f
+              object.created_at = DateTime.now.to_f unless object.options[:without_created_column] || object.options[:without_timestamps]
+              object.updated_at = DateTime.now.to_f unless object.options[:without_updated_column] || object.options[:without_timestamps]
               tables[object.class.table_name] ||= []
               tables[object.class.table_name] << object.attributes
             end
