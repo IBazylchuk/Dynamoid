@@ -100,7 +100,7 @@ module Dynamoid
           if value.nil? && (default_value = options[:default])
             value = if default_value.respond_to?(:call)
               default_value.call
-            elsif default_value.class.in?([Fixnum, Integer, Numeric, Float, NilClass, Symbol])
+            elsif default_value.class.in?([Integer, Numeric, Float, NilClass, Symbol])
               default_value
             else
               default_value.dup
