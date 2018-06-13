@@ -57,22 +57,6 @@ module Dynamoid #:nodoc:
         options[:key] || :id
       end
 
-      def hash_key_type
-        options[:hash_key_type] || :string
-      end
-
-      def without_timestamps_column
-        options[:without_timestamps_column] || false
-      end
-
-      def without_created_column
-        options[:without_created_column] || false
-      end
-
-      def without_updated_column
-        options[:without_updated_column] || false
-      end
-
       def ttl_column
         options[:ttl_column]
       end

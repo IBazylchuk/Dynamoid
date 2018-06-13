@@ -76,10 +76,10 @@ module Dynamoid #:nodoc:
         # a default 'id' column is created when Dynamoid::Document is included
         unless(attributes.has_key? hash_key)
           remove_field :id
-          field(hash_key, options[:hash_key_type] || :string)
+          field(hash_key)
 
-          remove_field :created_at if options[:without_created_column] || options[:without_timestamps]
-          remove_field :updated_at if options[:without_updated_column] || options[:without_timestamps]
+          remove_field :created_at if options[:without_created_at] || options[:without_timestamps]
+          remove_field :updated_at if options[:without_updated_at] || options[:without_timestamps]
         end
       end
 
